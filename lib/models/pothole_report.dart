@@ -64,6 +64,23 @@ class PotholeReport {
   final ReportParameters parameters;
   final DateTime timestamp;
   final String street;
+
+  PotholeReport copyWith({ReportStatus? status}) {
+    return PotholeReport(
+      id: id,
+      imagePath: imagePath,
+      lat: lat,
+      lng: lng,
+      gpsAccuracy: gpsAccuracy,
+      speed: speed,
+      score: score,
+      category: category,
+      status: status ?? this.status,
+      parameters: parameters,
+      timestamp: timestamp,
+      street: street,
+    );
+  }
 }
 
 /// Parameter penilaian: L luas, K kedalaman, P posisi lajur, T kepadatan.

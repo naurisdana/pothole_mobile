@@ -41,6 +41,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>RoadSafe memakai kamera belakang untuk mendeteksi lubang jalan langsung di perangkat.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>RoadSafe memakai lokasi untuk mencatat koordinat lubang dan menampilkan peta sebaran.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

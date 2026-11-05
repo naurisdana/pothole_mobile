@@ -16,17 +16,18 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
   int _index = 0;
 
-  static const _pages = <Widget>[
-    CameraHudScreen(),
-    HistoryScreen(),
-    DistributionMapScreen(),
-  ];
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _index == 0 ? const Color(0xFF0B1220) : const Color(0xFFF7F8FB),
-      body: IndexedStack(index: _index, children: _pages),
+      backgroundColor: _index == 0 ? const Color(0xFF07101C) : const Color(0xFFF7F8FB),
+      body: IndexedStack(
+        index: _index,
+        children: [
+          CameraHudScreen(active: _index == 0),
+          const HistoryScreen(),
+          const DistributionMapScreen(),
+        ],
+      ),
       bottomNavigationBar: _RoadSafeNavBar(
         index: _index,
         onSelected: (value) => setState(() => _index = value),

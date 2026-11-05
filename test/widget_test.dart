@@ -19,19 +19,26 @@ void main() {
     expect(mockReports[3].category, ReportCategory.low);
   });
 
-  testWidgets('Navigasi utama menampilkan tiga tab UI-M02', (tester) async {
+  testWidgets('Navigasi utama menampilkan HUD, riwayat, dan peta', (tester) async {
     await tester.pumpWidget(const RoadSafeApp());
+    await tester.pump();
 
-    expect(find.text('Kamera HUD'), findsWidgets);
+    expect(find.text('Kamera HUD'), findsOneWidget);
     expect(find.text('Riwayat'), findsOneWidget);
     expect(find.text('Peta Sebaran'), findsOneWidget);
+    expect(find.text('HUD CAM-01'), findsOneWidget);
 
     await tester.tap(find.text('Riwayat'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('12 laporan sampel'), findsOneWidget);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Riwayat & Antrean'), findsOneWidget);
+    expect(find.text('Jl. Pajajaran No. 45'), findsWidgets);
+    expect(find.text('Sinkronkan Sekarang'), findsOneWidget);
 
     await tester.tap(find.text('Peta Sebaran'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('12 titik sampel'), findsOneWidget);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('Buka Navigasi Rute'), findsOneWidget);
+    expect(find.text('Semua (12)'), findsWidgets);
   });
 }

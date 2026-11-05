@@ -1,7 +1,12 @@
 import '../models/pothole_report.dart';
 
 /// Hari demo antrean mobile. Jam di bawah adalah waktu WIB.
-final DateTime demoDay = DateTime(2026, 11, 4);
+final DateTime demoDay = DateTime.now();
+
+DateTime _stamp(int daysAgo, int hour, int minute) {
+  final day = DateTime(demoDay.year, demoDay.month, demoDay.day - daysAgo);
+  return DateTime(day.year, day.month, day.day, hour, minute);
+}
 
 /// Dua belas laporan: 3 antrean offline dan 9 sudah terkirim.
 final List<PotholeReport> mockReports = [
@@ -14,7 +19,7 @@ final List<PotholeReport> mockReports = [
     speed: 34,
     status: ReportStatus.menungguSinyal,
     parameters: const ReportParameters(l: 86, k: 78, p: 72, t: 72),
-    timestamp: DateTime(2026, 11, 4, 14, 23),
+    timestamp: _stamp(0, 14, 23),
     street: 'Jl. Pajajaran No. 45',
   ),
   PotholeReport.detected(
@@ -26,7 +31,7 @@ final List<PotholeReport> mockReports = [
     speed: 42,
     status: ReportStatus.terkirim,
     parameters: const ReportParameters(l: 58, k: 50, p: 46, t: 50),
-    timestamp: DateTime(2026, 11, 4, 13, 50),
+    timestamp: _stamp(0, 13, 50),
     street: 'Jl. Otto Iskandardinata',
   ),
   PotholeReport.detected(
@@ -38,7 +43,7 @@ final List<PotholeReport> mockReports = [
     speed: 31,
     status: ReportStatus.menungguSinyal,
     parameters: const ReportParameters(l: 70, k: 64, p: 60, t: 58),
-    timestamp: DateTime(2026, 11, 4, 12, 40),
+    timestamp: _stamp(0, 12, 40),
     street: 'Jl. Suryakencana',
   ),
   PotholeReport.detected(
@@ -50,7 +55,7 @@ final List<PotholeReport> mockReports = [
     speed: 28,
     status: ReportStatus.terkirim,
     parameters: const ReportParameters(l: 24, k: 18, p: 22, t: 26),
-    timestamp: DateTime(2026, 11, 4, 11, 15),
+    timestamp: _stamp(0, 11, 15),
     street: 'Jl. Malabar Ujung',
   ),
   PotholeReport.detected(
@@ -62,7 +67,7 @@ final List<PotholeReport> mockReports = [
     speed: 29,
     status: ReportStatus.menungguSinyal,
     parameters: const ReportParameters(l: 80, k: 74, p: 68, t: 66),
-    timestamp: DateTime(2026, 11, 4, 11, 5),
+    timestamp: _stamp(0, 11, 5),
     street: 'Jl. Ir. H. Juanda',
   ),
   PotholeReport.detected(
@@ -74,7 +79,7 @@ final List<PotholeReport> mockReports = [
     speed: 38,
     status: ReportStatus.terkirim,
     parameters: const ReportParameters(l: 90, k: 82, p: 78, t: 76),
-    timestamp: DateTime(2026, 11, 4, 9, 18),
+    timestamp: _stamp(0, 9, 18),
     street: 'Jl. Otista',
   ),
   PotholeReport.detected(
@@ -86,7 +91,7 @@ final List<PotholeReport> mockReports = [
     speed: 36,
     status: ReportStatus.dalamPenanganan,
     parameters: const ReportParameters(l: 50, k: 50, p: 44, t: 46),
-    timestamp: DateTime(2026, 11, 4, 8, 42),
+    timestamp: _stamp(0, 8, 42),
     street: 'Jl. Siliwangi',
   ),
   PotholeReport.detected(
@@ -98,7 +103,7 @@ final List<PotholeReport> mockReports = [
     speed: 41,
     status: ReportStatus.terkirim,
     parameters: const ReportParameters(l: 72, k: 64, p: 58, t: 60),
-    timestamp: DateTime(2026, 11, 4, 8, 5),
+    timestamp: _stamp(0, 8, 5),
     street: 'Jl. Jenderal Sudirman',
   ),
   PotholeReport.detected(
@@ -110,7 +115,7 @@ final List<PotholeReport> mockReports = [
     speed: 33,
     status: ReportStatus.terkirim,
     parameters: const ReportParameters(l: 60, k: 56, p: 50, t: 50),
-    timestamp: DateTime(2026, 11, 3, 16, 28),
+    timestamp: _stamp(1, 16, 28),
     street: 'Jl. RE Martadinata',
   ),
   PotholeReport.detected(
@@ -122,7 +127,7 @@ final List<PotholeReport> mockReports = [
     speed: 27,
     status: ReportStatus.terverifikasi,
     parameters: const ReportParameters(l: 68, k: 64, p: 60, t: 58),
-    timestamp: DateTime(2026, 11, 3, 15, 10),
+    timestamp: _stamp(1, 15, 10),
     street: 'Jl. Pahlawan',
   ),
   PotholeReport.detected(
@@ -134,7 +139,7 @@ final List<PotholeReport> mockReports = [
     speed: 22,
     status: ReportStatus.selesai,
     parameters: const ReportParameters(l: 36, k: 28, p: 30, t: 28),
-    timestamp: DateTime(2026, 11, 3, 13, 44),
+    timestamp: _stamp(1, 13, 44),
     street: 'Jl. Merdeka',
   ),
   PotholeReport.detected(
@@ -146,7 +151,7 @@ final List<PotholeReport> mockReports = [
     speed: 19,
     status: ReportStatus.ditolak,
     parameters: const ReportParameters(l: 30, k: 24, p: 18, t: 22),
-    timestamp: DateTime(2026, 11, 3, 10, 12),
+    timestamp: _stamp(1, 10, 12),
     street: 'Jl. Kapten Muslihat',
   ),
 ];
