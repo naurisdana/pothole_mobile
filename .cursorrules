@@ -1,0 +1,22 @@
+# CURSOR RULES: ROADASAFE MOBILE APP (FLUTTER)
+
+## Context
+You are building the Mobile Application for "ROADASAFE" - an edge-sensing pothole detection app used by drivers.
+
+## Tech Stack
+- Framework: Flutter (Dart)
+- Camera & AI Preview: `camera` package
+- Location & Speed: `geolocator`
+- Offline Database: `sqflite`
+- Maps: `flutter_map`
+- Icons: `lucide_icons`
+
+## Core Screens
+1. Onboarding (`UI-M00`): Permissions for Camera, GPS, & UU PDP Privacy.
+2. Camera HUD (`UI-M01`): Real-time camera preview, bounding boxes, FPS, GPS status, Pause button.
+3. History & Offline Queue (`UI-M02`): Local SQLite storage for offline scans, manual sync button.
+4. Map View (`UI-M03`): OpenStreetMap displaying pothole severity markers.
+
+## Guidelines
+- Follow clean architecture: `lib/models/`, `lib/screens/`, `lib/widgets/`, `lib/services/`.
+- Strictly match attached UI design references (UI-M00 to UI-M03).
