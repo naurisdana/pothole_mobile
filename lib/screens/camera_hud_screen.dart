@@ -305,21 +305,24 @@ class _StatusPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(24),
         boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4))],
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const _Dot(color: Color(0xFF22C55E)),
-          const SizedBox(width: 6),
-          Text(fpsLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-          const SizedBox(width: 10),
-          const Icon(LucideIcons.mapPin, size: 13, color: Color(0xFF16A34A)),
-          const SizedBox(width: 4),
-          Text(gpsLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 10),
-          const Icon(LucideIcons.cloud, size: 13, color: Color(0xFF64748B)),
-          const SizedBox(width: 4),
-          const Text('Online', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-        ],
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const _Dot(color: Color(0xFF22C55E)),
+            const SizedBox(width: 6),
+            Text(fpsLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 10),
+            const Icon(LucideIcons.mapPin, size: 13, color: Color(0xFF16A34A)),
+            const SizedBox(width: 4),
+            Text(gpsLabel, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 10),
+            const Icon(LucideIcons.cloud, size: 13, color: Color(0xFF64748B)),
+            const SizedBox(width: 4),
+            const Text('Online', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
     );
   }

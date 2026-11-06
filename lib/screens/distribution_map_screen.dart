@@ -334,7 +334,10 @@ class _DetailCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -347,12 +350,10 @@ class _DetailCard extends StatelessWidget {
                     style: TextStyle(color: tone, fontSize: 10, fontWeight: FontWeight.w800),
                   ),
                 ),
-                const SizedBox(width: 8),
                 Text(
                   'Skor ${report.score.toStringAsFixed(1)}',
                   style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
                 ),
-                const Spacer(),
                 Text(
                   formatReportWhen(report.timestamp),
                   style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),

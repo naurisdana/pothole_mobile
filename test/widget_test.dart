@@ -1,5 +1,7 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pothole_mobile/main.dart';
+import 'package:pothole_mobile/services/onboarding_store.dart';
 import 'package:pothole_mobile/models/pothole_report.dart';
 import 'package:pothole_mobile/services/mock_data.dart';
 
@@ -20,8 +22,31 @@ void main() {
   });
 
   testWidgets('Navigasi utama menampilkan HUD, riwayat, dan peta', (tester) async {
-    await tester.pumpWidget(const RoadSafeApp());
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      RoadSafeApp(
+        store: const OnboardingStore(overrideCompleted: false),
+        requestAccess: () async {},
+        splashHold: const Duration(milliseconds: 300),
+      ),
+    );
     await tester.pump();
+    expect(find.byKey(const Key('splash-logo')), findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Mulai Pantau Jalan Bersama'), findsOneWidget);
+    expect(find.text('IZIN KAMERA', skipOffstage: false), findsOneWidget);
+    expect(find.text('IZIN LOKASI PRESISI', skipOffstage: false), findsOneWidget);
+    expect(find.text('JAMINAN PRIVASI UU PDP', skipOffstage: false), findsOneWidget);
+
+    await tester.tap(find.text('Izinkan Akses & Lanjutkan'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Kamera HUD'), findsOneWidget);
     expect(find.text('Riwayat'), findsOneWidget);

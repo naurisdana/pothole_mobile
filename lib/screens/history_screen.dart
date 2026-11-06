@@ -353,20 +353,31 @@ class _ReportCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 4,
             children: [
-              const Icon(LucideIcons.clock, size: 13, color: Color(0xFF94A3B8)),
-              const SizedBox(width: 4),
-              Text(
-                formatReportWhen(report.timestamp),
-                style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(LucideIcons.clock, size: 13, color: Color(0xFF94A3B8)),
+                  const SizedBox(width: 4),
+                  Text(
+                    formatReportWhen(report.timestamp),
+                    style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              const Icon(LucideIcons.gauge, size: 13, color: Color(0xFF94A3B8)),
-              const SizedBox(width: 4),
-              Text(
-                '${report.speed.toStringAsFixed(0)} km/jam',
-                style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(LucideIcons.gauge, size: 13, color: Color(0xFF94A3B8)),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${report.speed.toStringAsFixed(0)} km/jam',
+                    style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+                  ),
+                ],
               ),
             ],
           ),
