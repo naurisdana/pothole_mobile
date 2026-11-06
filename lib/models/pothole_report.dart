@@ -64,6 +64,67 @@ class PotholeReport {
   final ReportParameters parameters;
   final DateTime timestamp;
   final String street;
+
+  factory PotholeReport.fromJson(Map<String, dynamic> json) {
+    final parameters = ReportParameters(
+      l: _number(json['nilai_L'] ?? json['l']),
+      k: _number(json['nilai_K'] ?? json['k']),
+      p: _number(json['nilai_P'] ?? json['p']),
+      t: _number(json['nilai_T'] ?? json['t']),
+    );
+    final score = _number(json['skor'] ?? json['score'], fallback: parameters.urgencyScore);
+    return PotholeReport(
+      id: '${json['id'] ?? json['kode_laporan'] ?? ''}',
+      imagePath: '${json['gambar_path'] ?? json['gambar_url'] ?? ''}',
+      lat: _number(json['latitude'] ?? json['lat']),
+      lng: _number(json['longitude'] ?? json['lng']),
+      gpsAccuracy: _number(json['akurasi_gps'] ?? json['gps_accuracy']),
+      speed: _number(json['kecepatan'] ?? json['speed']),
+      score: score,
+      category: _category(json['kategori'] ?? json['category'], score),
+      status: _status(json['status']),
+      parameters: parameters,
+      timestamp: DateTime.tryParse(
+            '${json['waktu'] ?? json['timestamp'] ?? ''}',
+          ) ??
+          DateTime.now(),
+      street: '${json['lokasi_jalan'] ?? json['street'] ?? 'Lokasi tidak diketahui'}',
+    );
+  }
+
+  static double _number(dynamic value, {double fallback = 0}) {
+    return value is num ? value.toDouble() : double.tryParse('$value') ?? fallback;
+  }
+
+  static ReportCategory _category(dynamic value, double score) {
+    final normalized = '$value'.toLowerCase();
+    if (normalized == 'high' || normalized.contains('tinggi')) {
+      return ReportCategory.high;
+    }
+    if (normalized == 'medium' || normalized.contains('sedang')) {
+      return ReportCategory.medium;
+    }
+    if (normalized == 'low' || normalized.contains('rendah')) {
+      return ReportCategory.low;
+    }
+    return ReportCategory.fromScore(score);
+  }
+
+  static ReportStatus _status(dynamic value) {
+    final normalized = '$value'.toLowerCase().replaceAll(RegExp(r'[^a-z]'), '');
+    if (normalized == 'pending' || normalized == 'terkirim') {
+      return ReportStatus.terkirim;
+    }
+    if (normalized.contains('penanganan')) return ReportStatus.dalamPenanganan;
+    if (normalized.contains('verifikasi')) return ReportStatus.terverifikasi;
+    if (normalized == 'selesai' || normalized == 'completed') {
+      return ReportStatus.selesai;
+    }
+    if (normalized == 'ditolak' || normalized == 'rejected') {
+      return ReportStatus.ditolak;
+    }
+    return ReportStatus.terkirim;
+  }
 }
 
 /// Parameter penilaian: L luas, K kedalaman, P posisi lajur, T kepadatan.
