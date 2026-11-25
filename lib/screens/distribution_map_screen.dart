@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../models/pothole_report.dart';
 import '../services/mock_data.dart';
+import '../services/road_safe_api_client.dart';
 import '../utils/report_format.dart';
 import '../widgets/report_thumbnail.dart';
 
@@ -18,19 +19,48 @@ class DistributionMapScreen extends StatefulWidget {
 
 class _DistributionMapScreenState extends State<DistributionMapScreen> {
   final MapController _mapController = MapController();
+  final _api = RoadSafeApiClient();
+  List<PotholeReport> _reports = [...mockReports];
   ReportCategory? _filter;
   PotholeReport? _selected = mockReports.first;
   var _satellite = false;
   var _mapReady = false;
+  String? _loadError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMap();
+  }
+
+  Future<void> _loadMap() async {
+    try {
+      final points = await _api.getMapReports();
+      final remote = points
+          .map(PotholeReport.fromJson)
+          .where((report) => report.lat != 0 || report.lng != 0)
+          .toList();
+      if (!mounted || remote.isEmpty) return;
+      setState(() {
+        _reports = remote;
+        _selected = remote.first;
+        _loadError = null;
+      });
+      _moveTo(remote.first);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadError = 'Peta API belum tersedia. Menampilkan sampel lokal.');
+    }
+  }
 
   List<PotholeReport> get _visible {
     final filter = _filter;
-    if (filter == null) return mockReports;
-    return mockReports.where((report) => report.category == filter).toList();
+    if (filter == null) return _reports;
+    return _reports.where((report) => report.category == filter).toList();
   }
 
   int _count(ReportCategory category) {
-    return mockReports.where((report) => report.category == category).length;
+    return _reports.where((report) => report.category == category).length;
   }
 
   void _choose(ReportCategory? category) {
@@ -46,8 +76,8 @@ class _DistributionMapScreenState extends State<DistributionMapScreen> {
   }
 
   List<PotholeReport> _visibleFor(ReportCategory? category) {
-    if (category == null) return mockReports;
-    return mockReports.where((report) => report.category == category).toList();
+    if (category == null) return _reports;
+    return _reports.where((report) => report.category == category).toList();
   }
 
   void _moveTo(PotholeReport report) {
@@ -98,13 +128,21 @@ class _DistributionMapScreenState extends State<DistributionMapScreen> {
                     ],
                   ),
                   const SizedBox(height: 10),
+                  if (_loadError != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        _loadError!,
+                        style: const TextStyle(color: Color(0xFFB45309), fontSize: 11),
+                      ),
+                    ),
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
                       children: [
                         _MapFilter(
                           label: 'Semua',
-                          count: mockReports.length,
+                          count: _reports.length,
                           selected: _filter == null,
                           color: const Color(0xFF3B6CFF),
                           onTap: () => _choose(null),
@@ -143,7 +181,7 @@ class _DistributionMapScreenState extends State<DistributionMapScreen> {
                 FlutterMap(
                   mapController: _mapController,
                   options: MapOptions(
-                    initialCenter: LatLng(mockReports.first.lat, mockReports.first.lng),
+                    initialCenter: LatLng(_reports.first.lat, _reports.first.lng),
                     initialZoom: 14,
                     onMapReady: () => _mapReady = true,
                     onTap: (_, _) => setState(() => _selected = null),
@@ -188,7 +226,7 @@ class _DistributionMapScreenState extends State<DistributionMapScreen> {
                       _MapButton(
                         icon: LucideIcons.locateFixed,
                         onTap: () {
-                          final target = _selected ?? mockReports.first;
+                          final target = _selected ?? _reports.first;
                           _moveTo(target);
                         },
                       ),

@@ -1,9 +1,21 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:path_provider/path_provider.dart';
+
+import '../services/camera_frame_input.dart';
+import '../services/detection_assessment.dart';
+import '../services/device_identity.dart';
+import '../services/reporting_controller.dart';
+import '../services/road_safe_api_client.dart';
+import '../services/vision_inference_service.dart';
 
 /// HUD kamera UI-M01. Pratinjau langsung, status sensor, dan tombol jeda.
 class CameraHudScreen extends StatefulWidget {
@@ -17,13 +29,24 @@ class CameraHudScreen extends StatefulWidget {
 
 class _CameraHudScreenState extends State<CameraHudScreen> {
   CameraController? _controller;
+  final _vision = VisionInferenceService();
   Timer? _fpsTimer;
   var _starting = false;
   var _paused = false;
+  var _busy = false;
   var _frames = 0;
   int? _fps;
   String? _error;
+  String? _modelNote;
   String _gpsLabel = 'GPS: mencari';
+  Position? _position;
+  StreamSubscription<Position>? _gpsSub;
+  DateTime? _nextInferAt;
+  List<VisionDetection> _detections = const [];
+  DetectionAssessment? _assessment;
+  String? _captureNote;
+  ReportingController? _reports;
+  var _sending = false;
 
   @override
   void initState() {
@@ -48,10 +71,98 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
     }
   }
 
+  Future<void> _prepareModel() async {
+    try {
+      await _vision.initialize();
+      if (!mounted) return;
+      setState(() => _modelNote = null);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _modelNote = 'Model ONNX belum siap');
+    }
+  }
+
+  void _maybeInfer(CameraController controller, CameraImage image) {
+    if (_busy || _paused || !widget.active || image.planes.isEmpty) return;
+    final now = DateTime.now();
+    if (_nextInferAt != null && now.isBefore(_nextInferAt!)) return;
+    _nextInferAt = now.add(const Duration(milliseconds: 1200));
+    _busy = true;
+    final request = CameraTensorRequest(
+      width: image.width,
+      height: image.height,
+      planes: [for (final plane in image.planes) Uint8List.fromList(plane.bytes)],
+      rowStrides: [for (final plane in image.planes) plane.bytesPerRow],
+      pixelStrides: [for (final plane in image.planes) plane.bytesPerPixel ?? 1],
+      rotationDegrees: _displayRotation(controller),
+    );
+    unawaited(_infer(request));
+  }
+
+  Future<void> _infer(CameraTensorRequest request) async {
+    try {
+      if (!_vision.isReady) await _vision.initialize();
+      final input = await compute(buildVisionInput, request);
+      final detections = await _vision.detectTensor(input);
+      if (!mounted || _paused || !widget.active) return;
+      final frame = VisionLetterbox.forFrame(request.width, request.height, request.rotationDegrees);
+      final mapped = [
+        for (final detection in detections)
+          VisionDetection(
+            confidence: detection.confidence,
+            left: frame.mapX(detection.left),
+            top: frame.mapY(detection.top),
+            right: frame.mapX(detection.right),
+            bottom: frame.mapY(detection.bottom),
+          ),
+      ]..sort((a, b) => b.confidence.compareTo(a.confidence));
+      final primary = mapped.isEmpty ? null : DetectionAssessment.fromDetection(mapped.first);
+      setState(() {
+        _detections = mapped;
+        _assessment = primary;
+        _modelNote = null;
+      });
+      if (primary != null && primary.detection.confidence >= 0.6) {
+        unawaited(_offerReport(request, primary));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _detections = const [];
+        _assessment = null;
+        _modelNote = _vision.isReady ? 'Deteksi gagal' : 'Model ONNX belum siap';
+      });
+    } finally {
+      _busy = false;
+    }
+  }
+
+  int _displayRotation(CameraController controller) {
+    final sensor = controller.description.sensorOrientation;
+    final device = switch (controller.value.deviceOrientation) {
+      DeviceOrientation.portraitUp => 0,
+      DeviceOrientation.landscapeLeft => 90,
+      DeviceOrientation.portraitDown => 180,
+      DeviceOrientation.landscapeRight => 270,
+    };
+    final front = controller.description.lensDirection == CameraLensDirection.front;
+    if (front) return (sensor + device) % 360;
+    return (sensor - device + 360) % 360;
+  }
+
+  Size _orientedPreviewSize(CameraController controller) {
+    final preview = controller.value.previewSize ?? Size.zero;
+    final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
+    if (portrait) return Size(preview.height, preview.width);
+    return Size(preview.width, preview.height);
+  }
+
   @override
   void dispose() {
     _fpsTimer?.cancel();
+    _gpsSub?.cancel();
     _controller?.dispose();
+    _vision.dispose();
     super.dispose();
   }
 
@@ -98,6 +209,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
         _starting = false;
       });
       unawaited(_readGps());
+      unawaited(_prepareModel());
     } on CameraException catch (error) {
       _fail(_cameraMessage(error));
     } catch (error) {
@@ -107,7 +219,10 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
 
   Future<void> _watchFrames(CameraController controller) async {
     try {
-      await controller.startImageStream((_) => _frames++);
+      await controller.startImageStream((image) {
+        _frames++;
+        _maybeInfer(controller, image);
+      });
       _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (!mounted) return;
         setState(() => _fps = _frames);
@@ -140,11 +255,99 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
           timeLimit: Duration(seconds: 8),
         ),
       );
-      final accuracy = position.accuracy.isFinite ? position.accuracy.round() : 0;
-      _setGps('GPS: OK (±${accuracy}m)');
+      _rememberPosition(position);
+      await _gpsSub?.cancel();
+      _gpsSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 8,
+        ),
+      ).listen(_rememberPosition, onError: (_) {});
     } catch (_) {
       _setGps('GPS: tidak tersedia');
     }
+  }
+
+  void _rememberPosition(Position position) {
+    _position = position;
+    final accuracy = position.accuracy.isFinite ? position.accuracy.round() : 0;
+    _setGps('GPS: OK (±${accuracy}m)');
+  }
+
+  Future<void> _ensureReporter() async {
+    if (_reports != null) return;
+    final id = await DeviceIdentity().getOrCreate();
+    final api = RoadSafeApiClient();
+    try {
+      await api.registerDevice(id: id, model: 'Flutter Mobile', appVersion: '1.0.0');
+    } catch (_) {}
+    _reports = ReportingController(api: api, deviceId: id);
+  }
+
+  Future<void> _offerReport(CameraTensorRequest request, DetectionAssessment assessment) async {
+    if (_sending || _paused || !widget.active) return;
+    final position = _position;
+    if (position == null) {
+      _setCapture('Menunggu GPS untuk mengirim laporan');
+      return;
+    }
+    if (!position.accuracy.isFinite || position.accuracy > 20) {
+      _setCapture('GPS ±${position.accuracy.round()} m. Laporan baru dikirim saat akurasi ≤ 20 m');
+      return;
+    }
+    _sending = true;
+    try {
+      await _ensureReporter();
+      final jpeg = await compute(encodeFrameJpeg, request);
+      if (jpeg.isEmpty || !mounted) return;
+      final dir = await getTemporaryDirectory();
+      final path = '${dir.path}${Platform.pathSeparator}pothole-${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await File(path).writeAsBytes(jpeg, flush: true);
+      final speed = position.speed.isFinite && position.speed >= 0 ? position.speed * 3.6 : null;
+      final heading = position.heading.isFinite && position.heading >= 0 ? position.heading : null;
+      final progress = await _reports!.addFrame(
+        DetectionFrame(
+          imagePath: path,
+          confidence: assessment.detection.confidence,
+          l: assessment.parameters.l,
+          k: assessment.parameters.k,
+          p: assessment.parameters.p,
+          t: assessment.parameters.t,
+          telemetry: TelemetrySnapshot(
+            latitude: position.latitude,
+            longitude: position.longitude,
+            accuracy: position.accuracy,
+            speed: speed,
+            heading: heading,
+          ),
+        ),
+      );
+      if (!mounted) return;
+      final delivery = progress.delivery;
+      if (delivery == null) {
+        try {
+          await File(path).delete();
+        } catch (_) {}
+        _setCapture('Mengunci lubang ${progress.frames}/${progress.requiredFrames}');
+        return;
+      }
+      final code = (progress.code == null || progress.code!.isEmpty) ? 'laporan' : progress.code!;
+      _setCapture(switch (delivery) {
+        ReportDelivery.sent => 'SMART AUTO-CAPTURE: $code (NEW_REPORT_CREATED)',
+        ReportDelivery.duplicate => 'Lubang ini sudah tercatat ($code)',
+        ReportDelivery.queued => 'Sinyal putus. Laporan disimpan dan dikirim saat online',
+        ReportDelivery.heldForGps => 'Akurasi GPS belum cukup untuk mengirim laporan',
+      });
+    } catch (_) {
+      _setCapture('Laporan belum terkirim. Coba lagi saat sinyal stabil');
+    } finally {
+      _sending = false;
+    }
+  }
+
+  void _setCapture(String note) {
+    if (!mounted) return;
+    setState(() => _captureNote = note);
   }
 
   void _setGps(String label) {
@@ -183,7 +386,13 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
       }
     } catch (_) {}
     if (!mounted) return;
-    setState(() => _paused = nextPaused);
+    setState(() {
+      _paused = nextPaused;
+      if (nextPaused) {
+        _detections = const [];
+        _assessment = null;
+      }
+    });
   }
 
   @override
@@ -201,6 +410,17 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
             _LivePreview(controller: controller)
           else
             const CustomPaint(painter: _RoadScenePainter()),
+          if (showDetection && _detections.isNotEmpty && controller.value.previewSize != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _DetectionPainter(
+                    detections: _detections,
+                    imageSize: _orientedPreviewSize(controller),
+                  ),
+                ),
+              ),
+            ),
           const DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
@@ -221,6 +441,17 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
                     live: ready && !_paused && _fps == null,
                     gpsLabel: _gpsLabel,
                   ),
+                  if (_captureNote != null) ...[
+                    const SizedBox(height: 8),
+                    _CaptureBanner(text: _captureNote!),
+                  ],
+                  if (_assessment != null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: _UrgencyCard(assessment: _assessment!),
+                    ),
+                  ],
                   const Spacer(),
                   if (_starting)
                     const Column(
@@ -235,23 +466,32 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
                     )
                   else if (_error != null)
                     _CameraNotice(message: _error!, onRetry: _start)
-                  else if (showDetection)
-                    const _DetectionBox(),
+                  else if (showDetection && _detections.isEmpty)
+                    Text(
+                      _modelNote ?? 'Memindai jalan...',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                    ),
                   const Spacer(),
                   if (ready)
-                    FilledButton.icon(
-                      onPressed: _togglePause,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: _paused ? const Color(0xFF16A34A) : const Color(0xFFE11D48),
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(168, 48),
-                        shape: const StadiumBorder(),
-                      ),
-                      icon: Icon(_paused ? LucideIcons.play : LucideIcons.pause, size: 16),
-                      label: Text(
-                        _paused ? 'Lanjut' : 'Jeda',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        FilledButton.icon(
+                          onPressed: _togglePause,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _paused ? const Color(0xFF16A34A) : const Color(0xFFE11D48),
+                            foregroundColor: Colors.white,
+                            minimumSize: const Size(148, 48),
+                            shape: const StadiumBorder(),
+                          ),
+                          icon: Icon(_paused ? LucideIcons.play : LucideIcons.pause, size: 16),
+                          label: Text(
+                            _paused ? 'Lanjut' : 'Jeda',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ],
                     ),
                   const SizedBox(height: 14),
                   const _HudCaption(),
@@ -328,6 +568,70 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
+class _CaptureBanner extends StatelessWidget {
+  const _CaptureBanner({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final sent = text.contains('NEW_REPORT_CREATED');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: sent ? const Color(0xF0145C32) : const Color(0xE6101724),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: sent ? const Color(0xFF4ADE80) : const Color(0xFFFACC15)),
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+}
+
+class _UrgencyCard extends StatelessWidget {
+  const _UrgencyCard({required this.assessment});
+
+  final DetectionAssessment assessment;
+
+  @override
+  Widget build(BuildContext context) {
+    final detection = assessment.detection;
+    final parameters = assessment.parameters;
+    final percent = (detection.confidence * 100).toStringAsFixed(0);
+    final area = assessment.areaCm2.round();
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 250),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xE6101724),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFACC15)),
+      ),
+      child: DefaultTextStyle(
+        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w700, height: 1.35),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${assessment.mark}  |  Lubang  |  $percent%  |  Area ±$area cm²'),
+            Text(
+              'Urgensi: ${assessment.category.label} (${assessment.score.toStringAsFixed(1)})  |  L:${parameters.l.round()} K:${parameters.k.round()} P:${parameters.p.round()} T:${parameters.t.round()}',
+            ),
+            const Text(
+              'K diperkirakan dari bentuk kotak',
+              style: TextStyle(color: Color(0xFFCBD5E1), fontSize: 10, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _Dot extends StatelessWidget {
   const _Dot({required this.color});
 
@@ -343,83 +647,58 @@ class _Dot extends StatelessWidget {
   }
 }
 
-class _DetectionBox extends StatelessWidget {
-  const _DetectionBox();
+class _DetectionPainter extends CustomPainter {
+  const _DetectionPainter({required this.detections, required this.imageSize});
 
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 230,
-      height: 96,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          const CustomPaint(painter: _CornerPainter(), size: Size(230, 96)),
-          Positioned(
-            top: -14,
-            left: 48,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(LucideIcons.alertTriangle, size: 14, color: Color(0xFFDC2626)),
-                  SizedBox(width: 4),
-                  Text(
-                    'H • TINGGI',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const Positioned(
-            right: 0,
-            bottom: -16,
-            child: Text(
-              'CONF 84%',
-              style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CornerPainter extends CustomPainter {
-  const _CornerPainter();
+  final List<VisionDetection> detections;
+  final Size imageSize;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 3
+    if (imageSize.width <= 0 || imageSize.height <= 0) return;
+    final scale = math.max(size.width / imageSize.width, size.height / imageSize.height);
+    final displayedW = imageSize.width * scale;
+    final displayedH = imageSize.height * scale;
+    final dx = (size.width - displayedW) / 2;
+    final dy = (size.height - displayedH) / 2;
+    final border = Paint()
+      ..color = const Color(0xFFFACC15)
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.square;
-    const length = 18.0;
-    final path = Path()
-      ..moveTo(0, length)
-      ..lineTo(0, 0)
-      ..lineTo(length, 0)
-      ..moveTo(size.width - length, 0)
-      ..lineTo(size.width, 0)
-      ..lineTo(size.width, length)
-      ..moveTo(0, size.height - length)
-      ..lineTo(0, size.height)
-      ..lineTo(length, size.height)
-      ..moveTo(size.width - length, size.height)
-      ..lineTo(size.width, size.height)
-      ..lineTo(size.width, size.height - length);
-    canvas.drawPath(path, paint);
+      ..strokeWidth = 2.5;
+    final labelBorder = Paint()
+      ..color = const Color(0xFFFACC15)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    final fill = Paint()..color = const Color(0xF0111827);
+    for (var index = 0; index < detections.length; index++) {
+      final detection = detections[index];
+      final rect = Rect.fromLTRB(
+        dx + detection.left * displayedW,
+        dy + detection.top * displayedH,
+        dx + detection.right * displayedW,
+        dy + detection.bottom * displayedH,
+      );
+      if (rect.width < 8 || rect.height < 8) continue;
+      canvas.drawRect(rect, border);
+      final label = 'P-${(index + 1).toString().padLeft(3, '0')}';
+      final text = TextPainter(
+        text: TextSpan(
+          text: label,
+          style: const TextStyle(color: Color(0xFFFACC15), fontSize: 12, fontWeight: FontWeight.w800),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final labelRect = Rect.fromLTWH(rect.left, math.max(0, rect.top - 20), text.width + 10, 20);
+      canvas.drawRect(labelRect, fill);
+      canvas.drawRect(labelRect, labelBorder);
+      text.paint(canvas, Offset(labelRect.left + 5, labelRect.top + 2));
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _DetectionPainter oldDelegate) {
+    return oldDelegate.detections != detections || oldDelegate.imageSize != imageSize;
+  }
 }
 
 class _CameraNotice extends StatelessWidget {

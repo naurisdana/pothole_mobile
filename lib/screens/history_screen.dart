@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:lucide_icons/lucide_icons.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../features/auth/presentation/pages/login_page.dart';
+import '../features/auth/presentation/providers/auth_provider.dart';
 import '../models/pothole_report.dart';
+import '../services/device_identity.dart';
 import '../services/mock_data.dart';
+import '../services/offline_report_queue.dart';
+import '../services/road_safe_api_client.dart';
 import '../utils/report_format.dart';
 import '../widgets/report_thumbnail.dart';
 
@@ -17,13 +22,25 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  late List<PotholeReport> _reports = [...mockReports];
+  final _api = RoadSafeApiClient();
+  final _queue = OfflineReportQueue();
+  List<PotholeReport> _reports = [...mockReports];
   var _filter = _QueueFilter.all;
   var _syncing = false;
+  var _loading = true;
+  var _queuedOffline = 0;
+  String? _error;
 
-  int get _queued => _reports.where((report) => report.status == ReportStatus.menungguSinyal).length;
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
 
-  int get _sent => _reports.length - _queued;
+  int get _queued =>
+      _reports.where((report) => report.status == ReportStatus.menungguSinyal).length + _queuedOffline;
+
+  int get _sent => _reports.where((report) => report.status != ReportStatus.menungguSinyal).length;
 
   List<PotholeReport> get _visible {
     switch (_filter) {
@@ -36,12 +53,52 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  Future<void> _load() async {
+    try {
+      final deviceId = await DeviceIdentity().getOrCreate();
+      await _api.registerDevice(id: deviceId, model: 'Flutter Mobile', appVersion: '1.0.0');
+      final remote = await _api.getReports(deviceId: deviceId);
+      final queued = await _queue.count();
+      if (!mounted) return;
+      setState(() {
+        _reports = remote;
+        _queuedOffline = queued;
+        _error = null;
+        _loading = false;
+      });
+    } catch (error) {
+      final queued = await _safeQueueCount();
+      if (!mounted) return;
+      setState(() {
+        _reports = [...mockReports];
+        _queuedOffline = queued;
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<int> _safeQueueCount() async {
+    try {
+      return await _queue.count();
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _sync() async {
-    if (_queued == 0 || _syncing) return;
+    if (_syncing) return;
     setState(() => _syncing = true);
-    await Future<void>.delayed(const Duration(milliseconds: 700));
+    var moved = 0;
+    try {
+      final pending = await _queue.pending();
+      for (final item in pending) {
+        await _api.uploadReport(item.payload);
+        await _queue.remove(item);
+        moved++;
+      }
+    } catch (_) {}
     if (!mounted) return;
-    final moved = _queued;
     setState(() {
       _reports = [
         for (final report in _reports)
@@ -50,18 +107,41 @@ class _HistoryScreenState extends State<HistoryScreen> {
           else
             report,
       ];
+      _queuedOffline = 0;
       _syncing = false;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$moved laporan terkirim ke server.')),
-    );
+    if (moved > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$moved laporan terkirim ke server.')),
+      );
+    }
+    await _load();
   }
 
-  void _reload() {
-    setState(() {
-      _reports = [...mockReports];
-      _filter = _QueueFilter.all;
-    });
+  Future<void> _logout() async {
+    final auth = AuthProvider.of(context, listen: false);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Konfirmasi Keluar'),
+        content: const Text('Apakah Anda yakin ingin keluar dari akun RoadSafe?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Batal')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFEF4444)),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Keluar'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+    await auth.logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      (route) => false,
+    );
   }
 
   @override
@@ -99,8 +179,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     ),
                   ),
                   IconButton(
-                    onPressed: _reload,
-                    tooltip: 'Muat ulang sampel',
+                    onPressed: _load,
+                    tooltip: 'Muat ulang laporan',
                     icon: const Icon(LucideIcons.refreshCw, size: 18),
                   ),
                 ],
@@ -110,6 +190,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                 children: [
+                  _AccountBar(onLogout: _logout),
+                  if (_loading) const LinearProgressIndicator(minHeight: 2),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Text(
+                        'Server belum terjangkau. Menampilkan sampel lokal.',
+                        style: const TextStyle(color: Color(0xFFB45309), fontSize: 12),
+                      ),
+                    ),
                   _SyncBanner(queued: _queued, syncing: _syncing, onSync: _sync),
                   const SizedBox(height: 14),
                   Row(
@@ -457,6 +547,54 @@ class _Badge extends StatelessWidget {
           Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 4),
           Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccountBar extends StatelessWidget {
+  const _AccountBar({required this.onLogout});
+
+  final VoidCallback onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    final user = AuthProvider.of(context).user;
+    if (user == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: [
+          const CircleAvatar(
+            radius: 18,
+            backgroundColor: Color(0xFFE7F0FF),
+            child: Icon(LucideIcons.user, color: Color(0xFF3B6CFF), size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(user.nama, style: const TextStyle(fontWeight: FontWeight.w800)),
+                Text(
+                  '${user.email} • ${user.peran}',
+                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Keluar',
+            onPressed: onLogout,
+            icon: const Icon(LucideIcons.logOut, color: Color(0xFFEF4444), size: 18),
+          ),
         ],
       ),
     );
