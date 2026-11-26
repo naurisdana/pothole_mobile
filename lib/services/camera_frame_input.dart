@@ -156,11 +156,11 @@ void _fillYuv420(
       var sx = dx;
       var sy = dy;
       if (rotation == 90) {
-        sx = srcW - 1 - dy;
-        sy = dx;
-      } else if (rotation == 270) {
         sx = dy;
         sy = srcH - 1 - dx;
+      } else if (rotation == 270) {
+        sx = srcW - 1 - dy;
+        sy = dx;
       } else if (rotation == 180) {
         sx = srcW - 1 - dx;
         sy = srcH - 1 - dy;
@@ -242,11 +242,11 @@ Uint8List encodeFrameJpeg(CameraTensorRequest request) {
 (int, int) _sourcePoint(int dx, int dy, int rotation, int srcW, int srcH) {
   switch (rotation) {
     case 90:
-      return (srcW - 1 - dy, dx);
+      return (dy, srcH - 1 - dx);
     case 180:
       return (srcW - 1 - dx, srcH - 1 - dy);
     case 270:
-      return (dy, srcH - 1 - dx);
+      return (srcW - 1 - dy, dx);
     default:
       return (dx.clamp(0, srcW - 1), dy.clamp(0, srcH - 1));
   }

@@ -49,6 +49,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
   String? _captureNote;
   ReportingController? _reports;
   var _sending = false;
+  DeviceOrientation? _deviceOrientation;
 
   @override
   void initState() {
@@ -105,7 +106,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
       final detections = await _vision.detectTensor(input);
       if (!mounted || _paused || !widget.active) return;
       final frame = VisionLetterbox.forFrame(request.width, request.height, request.rotationDegrees);
-      final mapped = [
+      final mapped = _onTheRoad([
         for (final detection in detections)
           VisionDetection(
             confidence: detection.confidence,
@@ -114,7 +115,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
             right: frame.mapX(detection.right),
             bottom: frame.mapY(detection.bottom),
           ),
-      ]..sort((a, b) => b.confidence.compareTo(a.confidence));
+      ])..sort((a, b) => b.confidence.compareTo(a.confidence));
       final smoothed = _stabilize(mapped);
       final primary = smoothed.isEmpty ? null : DetectionAssessment.fromDetection(smoothed.first);
       setState(() {
@@ -183,6 +184,23 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
     return intersection / union;
   }
 
+  List<VisionDetection> _onTheRoad(List<VisionDetection> detections) {
+    return [
+      for (final detection in detections)
+        if (_keepsRoadBox(detection)) detection,
+    ];
+  }
+
+  bool _keepsRoadBox(VisionDetection detection) {
+    final width = (detection.right - detection.left).clamp(0.0, 1.0);
+    final height = (detection.bottom - detection.top).clamp(0.0, 1.0);
+    final centerY = (detection.top + detection.bottom) / 2;
+    if (centerY < 0.22) return false;
+    if (width > 0.85 && height < 0.16) return false;
+    if (width * height > 0.45) return false;
+    return true;
+  }
+
   int _displayRotation(CameraController controller) {
     final sensor = controller.description.sensorOrientation;
     final device = switch (controller.value.deviceOrientation) {
@@ -198,8 +216,9 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
 
   Size _orientedPreviewSize(CameraController controller) {
     final preview = controller.value.previewSize ?? Size.zero;
-    final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
-    if (portrait) return Size(preview.height, preview.width);
+    final rotation = _displayRotation(controller);
+    final swap = rotation == 90 || rotation == 270;
+    if (swap) return Size(preview.height, preview.width);
     return Size(preview.width, preview.height);
   }
 
@@ -207,9 +226,16 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
   void dispose() {
     _fpsTimer?.cancel();
     _gpsSub?.cancel();
+    _controller?.removeListener(_onCameraChanged);
     _controller?.dispose();
     _vision.dispose();
     super.dispose();
+  }
+
+  void _onCameraChanged() {
+    final orientation = _controller?.value.deviceOrientation;
+    if (!mounted || orientation == _deviceOrientation) return;
+    setState(() => _deviceOrientation = orientation);
   }
 
   Future<void> _start() async {
@@ -222,6 +248,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
 
     final previous = _controller;
     _controller = null;
+    previous?.removeListener(_onCameraChanged);
     _fpsTimer?.cancel();
     await previous?.dispose();
 
@@ -251,6 +278,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
         await controller.pausePreview();
       }
       await _watchFrames(controller);
+      controller.addListener(_onCameraChanged);
       setState(() {
         _controller = controller;
         _starting = false;
