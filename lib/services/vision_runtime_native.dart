@@ -28,9 +28,22 @@ class VisionRuntime {
   Future<void> initialize() async {
     OrtEnv.instance.init();
     final raw = await rootBundle.load(_assetPath);
-    final options = OrtSessionOptions();
-    _session = OrtSession.fromBuffer(raw.buffer.asUint8List(), options);
+    final bytes = raw.buffer.asUint8List();
+    try {
+      _session = _open(bytes, useXnnpack: true);
+    } catch (_) {
+      _session = _open(bytes, useXnnpack: false);
+    }
+  }
+
+  OrtSession _open(Uint8List bytes, {required bool useXnnpack}) {
+    final options = OrtSessionOptions()
+      ..setIntraOpNumThreads(4)
+      ..setSessionGraphOptimizationLevel(GraphOptimizationLevel.ortEnableAll);
+    if (useXnnpack) options.appendXnnpackProvider();
+    final session = OrtSession.fromBuffer(bytes, options);
     options.release();
+    return session;
   }
 
   Future<List<RuntimeDetection>> detect(Uint8List jpegBytes) async {
@@ -114,8 +127,9 @@ class VisionRuntime {
     if (classChannels < 1) return const [];
 
     var peak = 0.0;
-    for (var index = 0; index < math.min(anchors, 32); index++) {
-      peak = math.max(peak, at(0, index).abs());
+    final step = math.max(1, anchors ~/ 48);
+    for (var index = 0; index < anchors; index += step) {
+      peak = math.max(peak, at(2, index).abs());
     }
     final scale = peak > 2 ? _inputSize.toDouble() : 1.0;
     final candidates = <RuntimeDetection>[];
@@ -124,7 +138,7 @@ class VisionRuntime {
       for (var channel = 4; channel < 4 + classChannels; channel++) {
         confidence = math.max(confidence, _score(at(channel, index)));
       }
-      if (confidence < 0.6) continue;
+      if (confidence < 0.4) continue;
       final centerX = at(0, index) / scale;
       final centerY = at(1, index) / scale;
       final width = at(2, index) / scale;

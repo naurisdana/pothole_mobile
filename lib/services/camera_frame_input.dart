@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -79,6 +81,10 @@ Float32List buildVisionInput(CameraTensorRequest request) {
   if (srcW <= 0 || srcH <= 0 || request.planes.isEmpty) return input;
 
   final box = VisionLetterbox.forFrame(srcW, srcH, rotation);
+  if (request.planes.length >= 3) {
+    _fillYuv420(input, request, box, rotation, orientedW, orientedH, srcW, srcH);
+    return input;
+  }
   final scaleX = orientedW / box.contentWidth;
   final scaleY = orientedH / box.contentHeight;
 
@@ -99,6 +105,111 @@ Float32List buildVisionInput(CameraTensorRequest request) {
     }
   }
   return input;
+}
+
+void _fillYuv420(
+  Float32List input,
+  CameraTensorRequest request,
+  VisionLetterbox box,
+  int rotation,
+  int orientedW,
+  int orientedH,
+  int srcW,
+  int srcH,
+) {
+  final planes = request.planes;
+  final yPlane = planes[0];
+  final uPlane = planes[1];
+  final vPlane = planes[2];
+  final yRow = request.rowStrides[0];
+  final uRow = request.rowStrides[1];
+  final vRow = request.rowStrides[2];
+  final yStep = request.pixelStrides[0] <= 0 ? 1 : request.pixelStrides[0];
+  final uStep = request.pixelStrides[1] <= 0 ? 1 : request.pixelStrides[1];
+  final vStep = request.pixelStrides[2] <= 0 ? 1 : request.pixelStrides[2];
+  final scaleX = orientedW / box.contentWidth;
+  final scaleY = orientedH / box.contentHeight;
+  final plane = visionInputSize * visionInputSize;
+  final yLen = yPlane.length;
+  final uLen = uPlane.length;
+  final vLen = vPlane.length;
+
+  for (var oy = 0; oy < visionInputSize; oy++) {
+    final fy = oy - box.padY;
+    if (fy < 0 || fy >= box.contentHeight) continue;
+    var dy = (fy * scaleY).round();
+    if (dy < 0) {
+      dy = 0;
+    } else if (dy >= orientedH) {
+      dy = orientedH - 1;
+    }
+    final row = oy * visionInputSize;
+    for (var ox = 0; ox < visionInputSize; ox++) {
+      final fx = ox - box.padX;
+      if (fx < 0 || fx >= box.contentWidth) continue;
+      var dx = (fx * scaleX).round();
+      if (dx < 0) {
+        dx = 0;
+      } else if (dx >= orientedW) {
+        dx = orientedW - 1;
+      }
+      var sx = dx;
+      var sy = dy;
+      if (rotation == 90) {
+        sx = srcW - 1 - dy;
+        sy = dx;
+      } else if (rotation == 270) {
+        sx = dy;
+        sy = srcH - 1 - dx;
+      } else if (rotation == 180) {
+        sx = srcW - 1 - dx;
+        sy = srcH - 1 - dy;
+      }
+      if (sx < 0) {
+        sx = 0;
+      } else if (sx >= srcW) {
+        sx = srcW - 1;
+      }
+      if (sy < 0) {
+        sy = 0;
+      } else if (sy >= srcH) {
+        sy = srcH - 1;
+      }
+      final yIndex = sy * yRow + sx * yStep;
+      final ux = sx >> 1;
+      final uy = sy >> 1;
+      final uIndex = uy * uRow + ux * uStep;
+      final vIndex = uy * vRow + ux * vStep;
+      final y = yIndex >= 0 && yIndex < yLen ? yPlane[yIndex] : 0;
+      final u = uIndex >= 0 && uIndex < uLen ? uPlane[uIndex] : 128;
+      final v = vIndex >= 0 && vIndex < vLen ? vPlane[vIndex] : 128;
+      final c = y - 16;
+      final d = u - 128;
+      final e = v - 128;
+      var r = (298 * c + 409 * e + 128) >> 8;
+      var g = (298 * c - 100 * d - 208 * e + 128) >> 8;
+      var b = (298 * c + 516 * d + 128) >> 8;
+      if (r < 0) {
+        r = 0;
+      } else if (r > 255) {
+        r = 255;
+      }
+      if (g < 0) {
+        g = 0;
+      } else if (g > 255) {
+        g = 255;
+      }
+      if (b < 0) {
+        b = 0;
+      } else if (b > 255) {
+        b = 255;
+      }
+      final offset = row + ox;
+      input[offset] = r / 255.0;
+      input[plane + offset] = g / 255.0;
+      input[plane * 2 + offset] = b / 255.0;
+    }
+  }
 }
 
 /// Foto bukti berorientasi layar, cukup untuk dikirim ke laporan.
@@ -192,4 +303,69 @@ int _at(Uint8List bytes, int index) {
   final g = ((298 * c - 100 * d - 208 * e + 128) >> 8).clamp(0, 255);
   final b = ((298 * c + 516 * d + 128) >> 8).clamp(0, 255);
   return (r, g, b);
+}
+
+/// Isolate yang tetap hidup, supaya setiap frame tidak membuat isolate baru.
+class VisionInputWorker {
+  VisionInputWorker._();
+
+  static final instance = VisionInputWorker._();
+
+  SendPort? _worker;
+  ReceivePort? _results;
+  Future<void>? _starting;
+  var _nextId = 0;
+  final _pending = <int, Completer<Float32List>>{};
+
+  Future<Float32List> prepare(CameraTensorRequest request) async {
+    try {
+      await (_starting ??= _start());
+    } catch (_) {
+      _starting = null;
+      return Isolate.run(() => buildVisionInput(request));
+    }
+    final id = _nextId++;
+    final done = Completer<Float32List>();
+    _pending[id] = done;
+    try {
+      _worker!.send(<Object>[id, request]);
+    } catch (_) {
+      _pending.remove(id);
+      return Isolate.run(() => buildVisionInput(request));
+    }
+    return done.future;
+  }
+
+  Future<void> _start() async {
+    final bootstrap = ReceivePort();
+    await Isolate.spawn(_visionInputMain, bootstrap.sendPort);
+    _worker = await bootstrap.first as SendPort;
+    bootstrap.close();
+    _results = ReceivePort();
+    _worker!.send(_results!.sendPort);
+    _results!.listen((message) {
+      if (message is! List || message.length < 2) return;
+      final id = message[0];
+      final tensor = message[1];
+      if (id is! int || tensor is! Float32List) return;
+      _pending.remove(id)?.complete(tensor);
+    });
+  }
+}
+
+void _visionInputMain(SendPort host) {
+  final inbox = ReceivePort();
+  host.send(inbox.sendPort);
+  SendPort? reply;
+  inbox.listen((message) {
+    if (message is SendPort) {
+      reply = message;
+      return;
+    }
+    if (reply == null || message is! List || message.length < 2) return;
+    final id = message[0];
+    final request = message[1];
+    if (id is! int || request is! CameraTensorRequest) return;
+    reply!.send(<Object>[id, buildVisionInput(request)]);
+  });
 }

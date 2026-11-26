@@ -41,7 +41,9 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
   String _gpsLabel = 'GPS: mencari';
   Position? _position;
   StreamSubscription<Position>? _gpsSub;
-  DateTime? _nextInferAt;
+  DateTime? _reportCooldownUntil;
+  var _stableCount = 0;
+  VisionDetection? _tracked;
   List<VisionDetection> _detections = const [];
   DetectionAssessment? _assessment;
   String? _captureNote;
@@ -84,9 +86,6 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
 
   void _maybeInfer(CameraController controller, CameraImage image) {
     if (_busy || _paused || !widget.active || image.planes.isEmpty) return;
-    final now = DateTime.now();
-    if (_nextInferAt != null && now.isBefore(_nextInferAt!)) return;
-    _nextInferAt = now.add(const Duration(milliseconds: 1200));
     _busy = true;
     final request = CameraTensorRequest(
       width: image.width,
@@ -102,7 +101,7 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
   Future<void> _infer(CameraTensorRequest request) async {
     try {
       if (!_vision.isReady) await _vision.initialize();
-      final input = await compute(buildVisionInput, request);
+      final input = await VisionInputWorker.instance.prepare(request);
       final detections = await _vision.detectTensor(input);
       if (!mounted || _paused || !widget.active) return;
       final frame = VisionLetterbox.forFrame(request.width, request.height, request.rotationDegrees);
@@ -116,13 +115,16 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
             bottom: frame.mapY(detection.bottom),
           ),
       ]..sort((a, b) => b.confidence.compareTo(a.confidence));
-      final primary = mapped.isEmpty ? null : DetectionAssessment.fromDetection(mapped.first);
+      final smoothed = _stabilize(mapped);
+      final primary = smoothed.isEmpty ? null : DetectionAssessment.fromDetection(smoothed.first);
       setState(() {
-        _detections = mapped;
+        _detections = smoothed;
         _assessment = primary;
         _modelNote = null;
       });
-      if (primary != null && primary.detection.confidence >= 0.6) {
+      final cooledDown = _reportCooldownUntil != null && DateTime.now().isBefore(_reportCooldownUntil!);
+      if (primary != null && primary.detection.confidence >= 0.5 && _stableCount >= 3 && !cooledDown) {
+        _stableCount = 0;
         unawaited(_offerReport(request, primary));
       }
     } catch (_) {
@@ -130,11 +132,55 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
       setState(() {
         _detections = const [];
         _assessment = null;
+        _tracked = null;
+        _stableCount = 0;
         _modelNote = _vision.isReady ? 'Deteksi gagal' : 'Model ONNX belum siap';
       });
     } finally {
       _busy = false;
     }
+  }
+
+  List<VisionDetection> _stabilize(List<VisionDetection> incoming) {
+    if (incoming.isEmpty) {
+      _stableCount = 0;
+      _tracked = null;
+      return const [];
+    }
+    final current = incoming.first;
+    final previous = _tracked;
+    if (previous != null && _boxIou(previous, current) >= 0.35) {
+      final chosen = VisionDetection(
+        confidence: current.confidence,
+        left: previous.left * 0.25 + current.left * 0.75,
+        top: previous.top * 0.25 + current.top * 0.75,
+        right: previous.right * 0.25 + current.right * 0.75,
+        bottom: previous.bottom * 0.25 + current.bottom * 0.75,
+      );
+      _tracked = chosen;
+      _stableCount++;
+      if (incoming.length == 1) return [chosen];
+      return [chosen, ...incoming.skip(1)];
+    }
+    _tracked = current;
+    _stableCount = 1;
+    return incoming;
+  }
+
+  double _boxIou(VisionDetection a, VisionDetection b) {
+    final left = math.max(a.left, b.left);
+    final top = math.max(a.top, b.top);
+    final right = math.min(a.right, b.right);
+    final bottom = math.min(a.bottom, b.bottom);
+    final width = right - left;
+    final height = bottom - top;
+    if (width <= 0 || height <= 0) return 0;
+    final intersection = width * height;
+    final union = (a.right - a.left) * (a.bottom - a.top) +
+        (b.right - b.left) * (b.bottom - b.top) -
+        intersection;
+    if (union <= 0) return 0;
+    return intersection / union;
   }
 
   int _displayRotation(CameraController controller) {
@@ -192,8 +238,9 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
       );
       final controller = CameraController(
         rear,
-        ResolutionPreset.high,
+        ResolutionPreset.medium,
         enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.yuv420,
       );
       await controller.initialize();
       if (!mounted) {
@@ -281,7 +328,11 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
     try {
       await api.registerDevice(id: id, model: 'Flutter Mobile', appVersion: '1.0.0');
     } catch (_) {}
-    _reports = ReportingController(api: api, deviceId: id);
+    _reports = ReportingController(
+      api: api,
+      deviceId: id,
+      requiredConsecutiveFrames: 1,
+    );
   }
 
   Future<void> _offerReport(CameraTensorRequest request, DetectionAssessment assessment) async {
@@ -332,6 +383,9 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
         return;
       }
       final code = (progress.code == null || progress.code!.isEmpty) ? 'laporan' : progress.code!;
+      if (delivery == ReportDelivery.sent || delivery == ReportDelivery.duplicate) {
+        _reportCooldownUntil = DateTime.now().add(const Duration(seconds: 8));
+      }
       _setCapture(switch (delivery) {
         ReportDelivery.sent => 'SMART AUTO-CAPTURE: $code (NEW_REPORT_CREATED)',
         ReportDelivery.duplicate => 'Lubang ini sudah tercatat ($code)',
@@ -391,6 +445,8 @@ class _CameraHudScreenState extends State<CameraHudScreen> {
       if (nextPaused) {
         _detections = const [];
         _assessment = null;
+        _tracked = null;
+        _stableCount = 0;
       }
     });
   }
